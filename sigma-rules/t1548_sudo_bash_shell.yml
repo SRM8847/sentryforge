@@ -1,0 +1,16 @@
+title: Sudo Used to Spawn Interactive Bash Shell
+id: c3f1a4d2-6e21-4c9d-9a2b-7f4e8d1b6a10
+status: experimental
+description: Detects sudo being used to directly execute /bin/bash, a common privilege-escalation and persistence pattern.
+logsource:
+  product: linux
+  service: sudo
+detection:
+  selection:
+    parent_id: 5400
+    data.command: /bin/bash
+  condition: selection
+tags:
+  - attack.privilege_escalation
+  - attack.t1548.003
+level: high

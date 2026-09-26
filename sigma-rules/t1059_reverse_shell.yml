@@ -1,0 +1,17 @@
+title: Bash Process Directly Opening a Network Connection (Reverse Shell)
+id: e7a2c9f1-4b83-4a1e-9c7d-2f6b1a8e5d33
+status: experimental
+description: Detects a bash process directly issuing a connect() syscall, a strong indicator of a reverse shell (e.g. bash -i >& /dev/tcp/...) rather than normal shell usage.
+logsource:
+  product: linux
+  service: auditd
+detection:
+  selection:
+    parent_id: 80700
+    field.audit.exe: /usr/bin/bash
+    field.audit.syscall: '42'
+  condition: selection
+tags:
+  - attack.command_and_control
+  - attack.t1059.004
+level: high

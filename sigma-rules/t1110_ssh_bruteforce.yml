@@ -1,0 +1,16 @@
+title: Rapid SSH Authentication Failures From Same Source (Fast Brute Force)
+id: a4d8f612-9c3e-4b7a-8e1f-6d2c9b4a7e15
+status: experimental
+description: Detects a fast burst of SSH authentication failures from the same source IP, catching small/quick brute-force attempts that fall under the built-in rule's slower threshold (8 failures in 180 seconds).
+logsource:
+  product: linux
+  service: sshd
+correlation:
+  if_matched_sid: 5760
+  frequency: 3
+  timeframe: 15
+  same_source_ip: true
+tags:
+  - attack.credential_access
+  - attack.t1110
+level: high
