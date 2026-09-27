@@ -25,7 +25,7 @@ jobs:
 
       - name: Test converted rules against fixtures
         run: |
-          sudo python3 tests/test_rules.py
+          python3 tests/test_rules.py
 
       - name: Deploy rules to Wazuh manager
         if: success()
