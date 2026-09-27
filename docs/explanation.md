@@ -174,6 +174,52 @@ This document explains what was actually done in each phase, point by point, in 
 
 ---
 
-## What's next
+## Phase 7 — GitHub Repository + Self-Hosted CI Runner
 
-- **Phase 7 onward:** Set up the actual GitHub repo, self-hosted CI runner, and the automated lint → convert → test → deploy pipeline.
+**Goal:** Turn the working directory on ubuntu-wazuh into a real, version-controlled Git repository on GitHub, and register a self-hosted Actions runner directly on ubuntu-wazuh — necessary because the upcoming CI pipeline needs local access to `wazuh-logtest` and the live Wazuh API, which GitHub's own cloud runners cannot reach.
+
+- Organized the repo into a clear structure: `sigma-rules/` (hand-written detection source), `converter/` (the Python script plus the stable `rule_id_map.json`), `fixtures/` (the 8 captured log samples), and `docs/` (this file and `errors_fix.md`).
+- Decided deliberately what to track in Git vs. leave generated: `converter/output/*.xml` (the compiled Wazuh rules) was excluded via `.gitignore`, since it's a build artifact CI will regenerate from source every run — committing it risks drift between what's in Git and what's actually deployed. `rule_id_map.json`, by contrast, **was** committed, since it's the stable record of which Sigma rule maps to which Wazuh rule ID; without committing it, every future run could risk reassigning IDs inconsistently.
+- Wrote a detailed top-level `README.md` explaining the project and the reasoning behind each phase (this is a live document, updated as later phases complete).
+- Initialized Git, made the first commit (17 files), and pushed to a real GitHub repository over SSH.
+- Registered a **self-hosted Actions runner** on ubuntu-wazuh itself: downloaded the runner package, verified its checksum, configured it against the repo with a registration token from GitHub, and installed it as a persistent **systemd service** (rather than running it in the foreground with `./run.sh`, which would die the moment a terminal closed) — confirmed it shows as idle and connected on GitHub's Runners page.
+
+**Why it matters:** A CI/CD pipeline is only meaningful if the automation actually has access to do real work. Since this project's testing and deployment fundamentally depend on tools that only exist on the Wazuh manager itself (`wazuh-logtest`, the local REST API), a self-hosted runner living on that exact machine is a hard requirement, not a preference.
+
+---
+
+## Phase 8 — CI/CD Pipeline (Lint → Convert → Test → Deploy)
+
+**Goal:** Wire the self-hosted runner into a real, automated GitHub Actions workflow that converts Sigma rules, tests them against the committed fixtures, and — only if every test passes — deploys them live to the Wazuh manager, with zero manual steps.
+
+**The core challenge:** `wazuh-logtest` had only ever been used interactively up to this point. Making it run inside an unattended script, and turning its output into a clear pass/fail result, was the real work of this phase — everything else (the workflow YAML itself) was comparatively simple once that was solid.
+
+### Building and proving the test harness
+- First confirmed, by hand, that `wazuh-logtest` behaves predictably when piped input non-interactively (produces the same output, and — critically — actually exits with a real code instead of hanging forever waiting for a terminal).
+- Wrote a Python test harness (`tests/test_rules.py`) plus a JSON file (`tests/expectations.json`) mapping each fixture to the specific rule ID it should (or should not) trigger.
+- Designed the harness to feed multi-line fixtures (the SSH brute-force and reverse-shell sequences) into a **single** `wazuh-logtest` session in order, since the SSH detection relies on state building up across several events in the same session — feeding them separately would never reproduce the real frequency-correlation behavior.
+- Also built in automatic handling for the two different fixture "shapes" already known from earlier phases: some fixtures were extracted from `alerts.log` (clean, ready to feed directly), while the reverse-shell fixtures were extracted from `archives.log` and carry an extra prefix Wazuh's own tooling doesn't expect — the harness strips this automatically rather than requiring hand-cleaned fixture files.
+- Hit and fixed **two real bugs** in getting this harness to actually work correctly (see `errors_fix.md` for full detail): `wazuh-logtest`'s real output was arriving on `stderr`, not `stdout`, when run without a terminal attached; and the regex used to find rule IDs in that output was missing a flag needed to match text that isn't right at the very start of the whole output block. Once both were fixed, all 6 relevant fixtures passed with a real, verifiable pass/fail exit code.
+
+### Building the deploy script and the workflow
+- Wrote `scripts/deploy_rules.sh`: authenticates to the Wazuh API, uploads the converted rules file, triggers a manager restart, and verifies the outcome.
+- Wrote the actual GitHub Actions workflow (`.github/workflows/detect.yml`): checkout → convert Sigma to XML → run the test harness → deploy (only reached if testing passed), configured to run on `push` to specific paths or via a manual trigger button.
+- Set up a GitHub repository secret (`WAZUH_API_PASSWORD`) so the live API password never needs to appear in the repo itself.
+
+### Getting the pipeline to actually pass, end to end
+Running this for real (rather than just locally) surfaced a series of genuine environment differences between "a person's interactive terminal" and "an unattended CI job" — each one real, each one fixed properly rather than worked around:
+- The very first CI run failed immediately because `sudo` has no way to prompt for a password when there's no terminal attached at all — fixed with a narrowly-scoped `sudoers` rule granting passwordless access to only the exact commands the pipeline needs (`wazuh-logtest`, later also `wazuh-analysisd`), not blanket passwordless sudo.
+- The next run failed the same way, because the *outer* invocation of the test script was also wrapped in `sudo` unnecessarily — this had appeared to work correctly during manual testing, purely because the terminal session had a leftover cached sudo credential from earlier unrelated commands, masking the real problem until it ran in a genuinely fresh environment.
+- The final run got all the way to deployment, but failed its own final health check — the deploy script originally just slept for a fixed 20 seconds and assumed the manager would be back up by then, but earlier phases already proved a restart can occasionally take much longer under load. Replaced the fixed sleep with a proper polling loop (checking every few seconds, up to a real timeout), and added a genuine post-restart correctness check (validating the ruleset itself, not just that the service process exists).
+- After all three fixes, triggered a completely fresh run: it passed every step, deployed live, and — confirmed independently afterward by actually triggering `sudo /bin/bash` on the monitored machine — the custom rule fired for real, on rules that had been deployed entirely through the automated pipeline.
+
+**Why it matters:** This is the phase that turns the project from "a person who knows the correct manual steps" into "an actual automated system." Every bug hit here was specifically a *CI-environment* bug — none of them would ever surface in ordinary interactive use — which is exactly the kind of realistic friction that separates having built a working system from having built a demo that only works when a human is present to babysit it.
+
+---
+
+## Current state
+
+- **3 working custom detections**, live-deployed and validated: T1548.003 (sudo → bash), T1059.004 (reverse shell), T1110 (SSH brute force).
+- **1 technique (T1053.003)** deliberately left uncovered by a custom rule, backed by direct testing rather than assumption.
+- A converter supporting three distinct rule shapes (simple field match, literal-named decoder fields, frequency/timeframe correlation), each added only when a real, tested need justified it.
+- A fully automated CI/CD pipeline: push a rule change → GitHub Actions runs on a self-hosted runner → converts, tests against real fixtures, and deploys live — with no manual steps required.
