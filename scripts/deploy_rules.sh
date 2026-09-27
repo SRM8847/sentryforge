@@ -39,11 +39,28 @@ echo "Restarting Wazuh manager..."
 curl -sk -X PUT "https://localhost:55000/manager/restart" -H "Authorization: Bearer $TOKEN"
 echo ""
 echo "Waiting for manager to come back up..."
-sleep 20
+MAX_WAIT=90
+WAITED=0
+until systemctl is-active --quiet wazuh-manager; do
+  if [ "$WAITED" -ge "$MAX_WAIT" ]; then
+    echo "ERROR: wazuh-manager did not become active within ${MAX_WAIT}s." >&2
+    systemctl status wazuh-manager --no-pager || true
+    exit 1
+  fi
+  sleep 5
+  WAITED=$((WAITED + 5))
+  echo "  ...still waiting (${WAITED}s elapsed)"
+done
 
-if ! systemctl is-active --quiet wazuh-manager; then
-  echo "ERROR: wazuh-manager is not active after restart." >&2
+echo "wazuh-manager is active after ${WAITED}s."
+
+# Confirm our rule is actually loaded, not just that the service is up.
+sleep 3
+if sudo -n /var/ossec/bin/wazuh-analysisd -t; then
+  echo "Ruleset validated clean."
+else
+  echo "ERROR: wazuh-analysisd config test failed after restart." >&2
   exit 1
 fi
 
-echo "Deploy successful. wazuh-manager is active."
+echo "Deploy successful."
