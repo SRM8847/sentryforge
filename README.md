@@ -86,11 +86,45 @@ This document explains what was actually built, phase by phase, and — more imp
 
 ---
 
+## Phase 7 — Turning this into a real, versioned project
+
+**The problem this phase solves:** Everything up to this point lived only as files in a folder on one machine. To actually automate anything — or let anyone else see, review, or build on this work — it needed to become a real Git repository with a home on GitHub, plus a way for automation to actually run commands on the machine.
+
+**What we did:**
+- Organized the working folder into a clean structure — rules, the converter, the captured evidence, and documentation each in their own folder — and set up Git to deliberately **not** track the converter's generated output file, since that's something automation should always regenerate fresh rather than trust a possibly-stale committed copy of.
+- Pushed the whole thing to a real GitHub repository.
+- Installed something called a **self-hosted runner** directly on the Wazuh manager machine. Normally, GitHub runs your automation on its own temporary cloud computers — but our automation needs to use tools (`wazuh-logtest`, the live Wazuh API) that only exist on this specific machine, so GitHub's own computers could never do this work. A self-hosted runner is simply GitHub's automation software installed to run locally on our own machine instead, listening for jobs to do.
+
+**Why it matters:** This phase has no clever logic in it, but it's the bridge that makes real automation possible at all. Skipping straight to writing automation without this piece would mean having nowhere for that automation to actually execute.
+
+---
+
+## Phase 8 — Making it fully automatic
+
+**The problem this phase solves:** Up to now, every single step — converting a rule, testing it, deploying it — required a person typing commands correctly, in the right order, on the right machine. This phase's entire goal was to make that happen automatically: push a change to GitHub, and have the system convert it, test it against real evidence, and deploy it live — with zero manual steps, and with a real safety net that stops a bad rule before it ever reaches production.
+
+**What we did:**
+- Built an automated test script that feeds each of our captured fixtures into `wazuh-logtest` and checks whether the expected rule fired (or, for benign fixtures, correctly *didn't* fire) — turning what had been a manual "type this in and eyeball the output" process into something a computer can check and report pass/fail on by itself.
+- Built a deploy script that authenticates to Wazuh, uploads the newly-converted rules, and restarts the manager — but only ever runs if every single test passed first.
+- Wrote the actual GitHub Actions automation file that ties it all together: whenever rule files change and get pushed, automatically run convert → test → deploy, in that order, stopping immediately if any step fails.
+
+**What went wrong, and what it taught us (this is the most valuable part of this phase):**
+- The very first automated run failed almost immediately, because our tool for feeding data into Wazuh's test system writes its results in a place our script wasn't looking — a mismatch that had been completely invisible during months of manual testing, only surfacing the moment a computer (rather than a human eye) tried to read the output precisely.
+- Right after fixing that, a *second*, unrelated bug in the same test script was uncovered — a small pattern-matching mistake that had been silently failing to find anything the whole time, hidden underneath the first bug.
+- Getting the automation to actually run on the server surfaced a genuinely important lesson: things that work perfectly when a person is sitting at the keyboard typing commands can fail in completely unexpected ways when a computer runs the exact same commands with nobody watching — specifically, needing a password when nobody's there to type one, and a script quietly relying on a shortcut that only worked because of a leftover unlock from a few minutes earlier.
+- The very last failure was the automation being too impatient — checking whether the system had finished restarting after a fixed, arbitrary wait, when we already knew from earlier work that a restart can sometimes take longer. Fixed by having it patiently check back every few seconds instead of guessing a single wait time, and by having it double check the actual result was correct — not just that the service was technically running.
+- After fixing all of this, one final real-world test confirmed it end-to-end: a rule was pushed, the automation picked it up, tested it, deployed it — completely unattended — and then, moments later, deliberately triggering the real attack behavior on the monitored machine produced a live alert, proving the whole automated chain actually works, not just that it reports success.
+
+**Why it matters:** This is genuinely the difference between "I know the correct manual steps" and "I built a working system." Every single problem hit in this phase only exists because a computer, not a person, was now doing the work — and each one is a small but real lesson about the gap between doing something by hand and building something that runs itself reliably.
+
+---
+
 ## Current state
 
 - **3 working, live, tested custom detections**: T1548.003, T1059.004, T1110.
 - **1 technique (T1053.003) deliberately left to Wazuh's built-in coverage**, with the reasoning documented rather than assumed.
 - A converter that supports three distinct kinds of rules — simple field matches, matches on differently-named decoder fields, and time-window frequency correlation — each added only when a real, tested need justified it, not speculatively.
 - 8 real, reproducibly-captured log fixtures covering both malicious and benign activity for every technique investigated.
+- **A fully automated pipeline**: push a rule change to GitHub, and it gets converted, tested against real evidence, and deployed live with no manual steps — confirmed working end-to-end against real attack behavior on the monitored machine.
 
 See `docs/explanation.md` for the full phase-by-phase build log, and `docs/errors_fix.md` for every specific error hit and how it was diagnosed and fixed.
