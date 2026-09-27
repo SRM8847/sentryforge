@@ -189,6 +189,60 @@ No errors encountered. Installation, service verification, API/dashboard checks,
 
 ---
 
-## Notes for later phases
+## Phase 7 — GitHub Repository + Self-Hosted CI Runner
 
-- Errors from Phase 7 onward will be appended here as they occur, using the same format: **Symptom → Root cause → Fix**.
+No errors encountered. Repo initialization, the first commit/push, and the self-hosted runner install/registration/systemd setup all worked as expected on the first pass.
+
+---
+
+## Phase 8 — CI/CD Pipeline
+
+### Error 1 — Test harness reported zero matched rules despite `wazuh-logtest` clearly working interactively
+
+- **Symptom:** Running the new `tests/test_rules.py` harness reported every malicious fixture as a failure, with "Matched rule IDs this session: []" — even though feeding the exact same lines into `wazuh-logtest` by hand, moments earlier, worked correctly.
+- **Root cause:** `wazuh-logtest` writes its actual decode/rule output to **stderr**, not stdout, when it detects there is no interactive terminal attached (confirmed by explicitly separating the two streams in a diagnostic run). In a real terminal, stdout and stderr appear interleaved on the same screen, so this distinction was invisible during all previous manual testing — the harness's `subprocess.run(..., capture_output=True)` call was only reading `stdout`, which was essentially empty.
+- **Fix:** Updated the harness to concatenate `result.stdout + result.stderr` before searching for rule IDs, rather than checking `stdout` alone.
+
+### Error 2 — Harness still failed after the stdout/stderr fix, with the same "zero matched" symptom
+
+- **Symptom:** After fixing Error 1, the harness still reported zero matched rule IDs on every fixture, even though a manual diagnostic run confirmed the real output (via stderr) clearly contained lines like `id: '110001'`.
+- **Root cause:** The regular expression used to find rule IDs (`^\s*id:\s*'(\d+)'`) used the `^` "start of string" anchor, but by default in Python this only matches the very beginning of the *entire* input, not the start of each individual line. Since `wazuh-logtest`'s multi-line output has `id: '...'` appearing partway through the text rather than at position zero, the pattern silently never matched anything, on any fixture, the whole time — a second bug hiding underneath the first.
+- **Fix:** Added the `re.MULTILINE` flag to the compiled regex, so `^` correctly matches the start of every line rather than only the start of the whole string.
+
+### Error 3 — GitHub Actions test step failed: "sudo: a terminal is required to read the password"
+
+- **Symptom:** The first real CI run failed at the test step with `sudo: a terminal is required to read the password; either use the -S option to read from standard input or configure an askpass helper`.
+- **Root cause:** The GitHub Actions self-hosted runner executes jobs as a background service process with no interactive terminal (TTY) attached at all. `sudo` has no way to prompt for (or receive) a password in that context, so any command requiring a password via `sudo` fails immediately — this had never come up before because every previous test was run from a real logged-in terminal session.
+- **Fix:** Created a narrowly-scoped `/etc/sudoers.d/sentryforge-ci` rule granting the CI user passwordless `sudo` access to **only** the specific commands the pipeline actually needs (`wazuh-logtest`, later also `wazuh-analysisd`) — deliberately not a blanket passwordless-sudo grant, to avoid a real security regression on the machine.
+  ```bash
+  echo "soumya2 ALL=(root) NOPASSWD: /var/ossec/bin/wazuh-logtest, /var/ossec/bin/wazuh-analysisd" | sudo tee /etc/sudoers.d/sentryforge-ci
+  sudo chmod 0440 /etc/sudoers.d/sentryforge-ci
+  sudo visudo -c   # always validate syntax before trusting a new sudoers file
+  ```
+
+### Error 4 — The same "terminal is required" error recurred even after the sudoers fix
+
+- **Symptom:** After adding the passwordless-sudo rule, running `sudo python3 tests/test_rules.py` by hand appeared to work fine — but the exact same command still failed inside GitHub Actions with the identical TTY error.
+- **Root cause:** The harness script's own code already wraps its one privileged call internally (`subprocess.run(["sudo", "/var/ossec/bin/wazuh-logtest"], ...)`) — there was never a need to also run the *outer* Python script itself with `sudo`. Manual testing with `sudo python3 ...` had appeared to succeed only because the terminal session already had a **cached sudo credential** from earlier, unrelated `sudo` commands run moments before in the same session — masking the fact that this outer `sudo` was both unnecessary and would fail from a truly fresh session with no cached credential, exactly like GitHub's runner.
+- **Fix:** Removed the unnecessary outer `sudo` from the workflow file, running the script as a plain `python3 tests/test_rules.py` — the internal `subprocess` call still elevates only the one command that actually needs it, via the scoped sudoers rule from Error 3.
+
+### Error 5 — Deploy step failed: "wazuh-manager is not active after restart"
+
+- **Symptom:** The pipeline finally reached the deploy step, successfully authenticated, uploaded the rules file, and triggered a manager restart — but then failed its own final health check, reporting the manager wasn't active.
+- **Root cause:** The deploy script used a fixed `sleep 20` and then checked service status exactly once. Earlier phases (see Phase 5, Error 3) already demonstrated that a Wazuh manager restart can occasionally take well over 20 seconds under load — the manager likely did come back up successfully, just slightly later than the script's single, impatient check allowed for.
+- **Fix:** Replaced the fixed sleep with a proper polling loop — checking `systemctl is-active` every 5 seconds up to a 90-second maximum — and added a genuine additional correctness check afterward (`wazuh-analysisd -t`, validating the ruleset itself compiles cleanly), rather than only confirming the service process exists.
+  ```bash
+  MAX_WAIT=90
+  WAITED=0
+  until systemctl is-active --quiet wazuh-manager; do
+    if [ "$WAITED" -ge "$MAX_WAIT" ]; then
+      echo "ERROR: wazuh-manager did not become active within ${MAX_WAIT}s." >&2
+      exit 1
+    fi
+    sleep 5
+    WAITED=$((WAITED + 5))
+  done
+  ```
+- **Result:** After all three CI-specific fixes (Errors 3–5), a fresh pipeline run passed every step and deployed successfully — independently confirmed afterward by triggering real activity on the monitored machine and watching the CI-deployed rule fire live.
+
+---
