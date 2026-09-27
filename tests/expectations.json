@@ -1,0 +1,8 @@
+{
+  "t1548_sudo_bash.malicious.log":   {"rule_id": 110001, "should_fire": true},
+  "t1548_sudo_bash.benign.log":      {"rule_id": 110001, "should_fire": false},
+  "t1059_reverse_shell.malicious.log": {"rule_id": 110000, "should_fire": true},
+  "t1059_reverse_shell.benign.log":    {"rule_id": 110000, "should_fire": false},
+  "t1110_ssh_bruteforce.malicious.log": {"rule_id": 110002, "should_fire": true},
+  "t1110_ssh_bruteforce.benign.log":    {"rule_id": 110002, "should_fire": false}
+}

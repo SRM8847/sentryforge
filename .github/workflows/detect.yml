@@ -1,0 +1,35 @@
+name: SentryForge Detection Pipeline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sigma-rules/**'
+      - 'converter/**'
+      - 'fixtures/**'
+      - 'tests/**'
+  workflow_dispatch: {}
+
+jobs:
+  build-test-deploy:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Lint & convert Sigma rules to Wazuh XML
+        run: |
+          cd converter
+          python3 sigma_to_wazuh.py ../sigma-rules
+
+      - name: Test converted rules against fixtures
+        run: |
+          sudo python3 tests/test_rules.py
+
+      - name: Deploy rules to Wazuh manager
+        if: success()
+        env:
+          WAZUH_API_PASSWORD: ${{ secrets.WAZUH_API_PASSWORD }}
+        run: |
+          bash scripts/deploy_rules.sh
