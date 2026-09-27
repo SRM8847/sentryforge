@@ -1,0 +1,64 @@
+{
+  "name": "SentryForge Detection Coverage",
+  "versions": {
+    "attack": "15",
+    "navigator": "4.9.1",
+    "layer": "4.5"
+  },
+  "domain": "enterprise-attack",
+  "description": "Detection coverage for the SentryForge (Wazuh Edition) project. Green techniques have a live, custom-deployed detection rule, validated against real captured attack fixtures and confirmed firing on genuine endpoint activity. Yellow techniques were deliberately investigated and NOT given a custom rule, with the reasoning documented (either sufficient built-in Wazuh coverage already exists, or the available log data does not support a more specific detection).",
+  "filters": {
+    "platforms": ["Linux"]
+  },
+  "sorting": 0,
+  "layout": {
+    "layout": "side",
+    "showAggregateScores": false,
+    "showID": true,
+    "showName": true
+  },
+  "hideDisabled": false,
+  "techniques": [
+    {
+      "techniqueID": "T1548.003",
+      "tactic": "privilege-escalation",
+      "color": "#4caf50",
+      "comment": "Custom rule 110001. Detects sudo directly executing /bin/bash. Chained via if_sid off Wazuh's base sudo rule (5400). Live-tested and deployed via CI/CD.",
+      "enabled": true,
+      "showSubtechniques": true
+    },
+    {
+      "techniqueID": "T1059.004",
+      "tactic": "execution",
+      "color": "#4caf50",
+      "comment": "Custom rule 110000. Detects a bash process directly issuing a connect() syscall (reverse shell signature). Chained off the auditd base rule (80700), matching audit.exe + audit.syscall together. Live-tested and deployed via CI/CD.",
+      "enabled": true,
+      "showSubtechniques": true
+    },
+    {
+      "techniqueID": "T1110",
+      "tactic": "credential-access",
+      "color": "#4caf50",
+      "comment": "Custom rule 110002. Frequency/timeframe correlation (3 failures / 15s) chained off sshd's own failure rule (5760), catching a fast-burst gap in Wazuh's built-in brute-force rule (5551, tuned for 8 failures / 180s). Live-tested with a real Hydra run and deployed via CI/CD.",
+      "enabled": true,
+      "showSubtechniques": true
+    },
+    {
+      "techniqueID": "T1053.003",
+      "tactic": "persistence",
+      "color": "#ffc107",
+      "comment": "Investigated, deliberately not implemented. The crontab syslog message only records that a change occurred, never the entry's content (confirmed via wazuh-logtest: 'No decoder matched'). File Integrity Monitoring diff capture was tested as an alternative but does not work here, since crontab replaces its file atomically rather than editing in place. Wazuh's built-in rule 2833 already covers the only signal actually available at this log layer.",
+      "enabled": true,
+      "showSubtechniques": true
+    }
+  ],
+  "gradientHexColors": ["#ff6666", "#ffe766", "#8ec843"],
+  "legendItems": [
+    {"label": "Live custom detection (implemented + tested + deployed via CI/CD)", "color": "#4caf50"},
+    {"label": "Investigated, deliberately not implemented (reasoning documented)", "color": "#ffc107"}
+  ],
+  "showTacticRowBackground": true,
+  "tacticRowBackground": "#dddddd",
+  "selectTechniquesAcrossTactics": true,
+  "selectSubtechniquesWithParent": false
+}
